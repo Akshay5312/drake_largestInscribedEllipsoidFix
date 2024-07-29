@@ -322,6 +322,9 @@ class HPolyhedron final : public ConvexSet, private ShapeReifier {
   using ConvexSet::CalcVolume;
 
  private:
+  /* Calculate the largest inscribed ball contained in the HPolyhedron. */
+  Hyperellipsoid CalcChebyshevBall() const;
+
   /* @pre other.ambient_dimension() == this->ambient_dimension() */
   [[nodiscard]] HPolyhedron DoIntersectionNoChecks(
       const HPolyhedron& other) const;

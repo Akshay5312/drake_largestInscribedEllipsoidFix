@@ -390,6 +390,32 @@ HPolyhedron::HPolyhedron(const MathematicalProgram& prog)
 HPolyhedron::~HPolyhedron() = default;
 
 Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
+  // unbouded or empty polyhedra do not have a solution; throw an exception.
+  assert(IsBounded());
+  assert(!IsEmpty());
+
+  // Get the chebyshev ball.
+  // The hyperellipsoid program may fail for small enough polytope volumes.
+  // In these cases, the polytope can be scaled up & transformed before we
+  // find the Maximum Volume Inscribed Ellipsoid.
+  Hyperellipsoid chebyshev_ball = CalcChebyshevBall();
+
+  double chebyshev_radius = std::pow(1.0 / chebyshev_ball.A().determinant(),
+                                  1.0 / ambient_dimension());
+  VectorXd chebyshev_center = chebyshev_ball.center();
+
+  VectorXd b_possibly_transformed = b_;
+
+  bool to_transform = chebyshev_radius < 1e-2;
+  if (to_transform) {
+    // Normalize the polyhedrom. This new polyhedron (characterized by A_ and b) will be larger and centered
+    // at the origin.
+    // $A_(x + chebyshev_center) - b_ \leq 0 characterizes a new polyhedron with a chebyshev center at the origin.
+    // a new polyhedron with a chebyshev radius of about 1 unit. 
+    VectorXd b_offset = -A_ * chebyshev_center; 
+    b_possibly_transformed = (b_ + b_offset) / chebyshev_radius;
+  }
+
   MathematicalProgram prog;
   const int N = this->ambient_dimension();
   MatrixXDecisionVariable C = prog.NewSymmetricContinuousVariables(N, "C");
@@ -397,7 +423,7 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
 
   // Compute rowwise norms for later use in normalization of linear constraints.
   MatrixXd augmented_matrix(A_.rows(), A_.cols() + b_.cols());
-  augmented_matrix << A_, b_;
+  augmented_matrix << A_, b_possibly_transformed;
   VectorXd row_norms = augmented_matrix.rowwise().norm();
 
   // max log det (C).  This method also imposes C ≽ 0.
@@ -406,7 +432,7 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
   // Add this as A_lorentz * vars + b_lorentz in the Lorentz cone constraint.
   // vars = [d; C.col(0); C.col(1); ...; C.col(n-1)]
   // A_lorentz = block_diagonal(-A_.row(i), A_.row(i), ..., A_.row(i))
-  // b_lorentz = [b_(i); 0; ...; 0]
+  // b_lorentz = [b(i); 0; ...; 0]
   // We also normalize each row, by dividing each instance of aᵢ and bᵢ with the
   // corresponding row norm.
   VectorX<symbolic::Variable> vars(C.rows() * C.cols() + d.rows());
@@ -418,16 +444,17 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
   Eigen::MatrixXd A_lorentz =
       Eigen::MatrixXd::Zero(1 + C.cols(), (1 + C.cols()) * C.rows());
   Eigen::VectorXd b_lorentz = Eigen::VectorXd::Zero(1 + C.cols());
-  for (int i = 0; i < b_.size(); ++i) {
+  for (int i = 0; i < b_possibly_transformed.size(); ++i) {
     A_lorentz.setZero();
     A_lorentz.block(0, 0, 1, A_.cols()) = -A_.row(i) / row_norms(i);
     for (int j = 0; j < C.cols(); ++j) {
       A_lorentz.block(j + 1, (j + 1) * C.cols(), 1, A_.cols()) =
           A_.row(i) / row_norms(i);
     }
-    b_lorentz(0) = b_(i) / row_norms(i);
+    b_lorentz(0) = b_possibly_transformed(i) / row_norms(i);
     prog.AddLorentzConeConstraint(A_lorentz, b_lorentz, vars);
   }
+
   auto result = solvers::Solve(prog);
   if (!result.is_success()) {
     throw std::runtime_error(fmt::format(
@@ -436,10 +463,21 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
         "bounded and has an interior.",
         result.get_solver_id().name(), result.get_solution_result()));
   }
-  return Hyperellipsoid(result.GetSolution(C).inverse(), result.GetSolution(d));
+
+  MatrixXd C_sol = result.GetSolution(C).inverse();
+  VectorXd d_sol = result.GetSolution(d);
+
+  // Correct the transformed solution.
+  Hyperellipsoid largest_ellipsoid =
+      to_transform ? Hyperellipsoid(C_sol / chebyshev_radius,
+                                      chebyshev_radius * d_sol +
+                                      chebyshev_center)
+      : Hyperellipsoid(C_sol, d_sol);
+
+  return largest_ellipsoid;
 }
 
-VectorXd HPolyhedron::ChebyshevCenter() const {
+Hyperellipsoid HPolyhedron::CalcChebyshevBall() const {
   MathematicalProgram prog;
   VectorXDecisionVariable x = prog.NewContinuousVariables(ambient_dimension());
   VectorXDecisionVariable r = prog.NewContinuousVariables<1>("r");
@@ -467,7 +505,17 @@ VectorXd HPolyhedron::ChebyshevCenter() const {
         "and has an interior.",
         result.get_solver_id().name(), result.get_solution_result()));
   }
-  return result.GetSolution(x);
+
+  VectorXd center = result.GetSolution(x);
+  double radius = result.GetSolution(r)[0];
+
+  return Hyperellipsoid(
+      MatrixXd::Identity(ambient_dimension(), ambient_dimension()) / radius,
+      center);
+}
+
+VectorXd HPolyhedron::ChebyshevCenter() const {
+  return CalcChebyshevBall().center();
 }
 
 HPolyhedron HPolyhedron::Scale(double scale,
