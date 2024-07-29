@@ -401,18 +401,20 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
   Hyperellipsoid chebyshev_ball = CalcChebyshevBall();
 
   double chebyshev_radius = std::pow(1.0 / chebyshev_ball.A().determinant(),
-                                  1.0 / ambient_dimension());
+                                     1.0 / ambient_dimension());
   VectorXd chebyshev_center = chebyshev_ball.center();
 
   VectorXd b_possibly_transformed = b_;
 
   bool to_transform = chebyshev_radius < 1e-2;
   if (to_transform) {
-    // Normalize the polyhedrom. This new polyhedron (characterized by A_ and b) will be larger and centered
+    // Normalize the polyhedrom. This new polyhedron (characterized by A_ and b)
+    // will be larger and centered
     // at the origin.
-    // $A_(x + chebyshev_center) - b_ \leq 0 characterizes a new polyhedron with a chebyshev center at the origin.
-    // a new polyhedron with a chebyshev radius of about 1 unit. 
-    VectorXd b_offset = -A_ * chebyshev_center; 
+    // $A_(x + chebyshev_center) - b_ \leq 0 characterizes a new polyhedron with
+    // a chebyshev center at the origin.
+    // a new polyhedron with a chebyshev radius of about 1 unit.
+    VectorXd b_offset = -A_ * chebyshev_center;
     b_possibly_transformed = (b_ + b_offset) / chebyshev_radius;
   }
 
@@ -470,9 +472,8 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
   // Correct the transformed solution.
   Hyperellipsoid largest_ellipsoid =
       to_transform ? Hyperellipsoid(C_sol / chebyshev_radius,
-                                      chebyshev_radius * d_sol +
-                                      chebyshev_center)
-      : Hyperellipsoid(C_sol, d_sol);
+                                    chebyshev_radius * d_sol + chebyshev_center)
+                   : Hyperellipsoid(C_sol, d_sol);
 
   return largest_ellipsoid;
 }
